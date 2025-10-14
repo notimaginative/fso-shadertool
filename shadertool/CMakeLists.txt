@@ -31,5 +31,6 @@ target_compile_options(shadertool PRIVATE
 )
 
 target_compile_definitions(shadertool PRIVATE NOMINMAX)
+target_compile_features(shadertool PUBLIC cxx_std_17)
 
 install(TARGETS shadertool DESTINATION bin)

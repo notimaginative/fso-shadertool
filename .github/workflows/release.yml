@@ -8,15 +8,25 @@ on:
 jobs:
     build_linux:
         name: Linux
-        runs-on: ubuntu-20.04
+        runs-on: ubuntu-latest
+        container: ubuntu:20.04
         steps:
         - name: Prepare Environment
           working-directory: /tmp
+          env:
+            DEBIAN_FRONTEND: noninteractive
           run: |
-              sudo add-apt-repository ppa:ubuntu-toolchain-r/test
-              sudo apt-get -yq update
-              sudo apt-get -yq install cmake ninja-build g++-10
-        - uses: actions/checkout@v1
+              apt-get -yqq update
+              apt-get -yqq install software-properties-common build-essential git wget
+              add-apt-repository ppa:ubuntu-toolchain-r/test
+              apt-get -yqq update
+              apt-get -yqq install ninja-build g++-10
+        - name: Install CMake
+          run: |
+              wget -O /tmp/cmake-install.sh https://github.com/Kitware/CMake/releases/download/v3.31.9/cmake-3.31.9-linux-x86_64.sh
+              chmod u+x /tmp/cmake-install.sh
+              /tmp/cmake-install.sh --skip-license --prefix=/usr/local
+        - uses: actions/checkout@v5
           name: Checkout
           with:
               submodules: true
@@ -41,15 +51,64 @@ jobs:
           working-directory: /tmp/install
           run: tar -zcvf /tmp/shadertool-linux.tar.gz *
         - name: Upload package
-          uses: actions/upload-artifact@v2
+          uses: actions/upload-artifact@v4
           with:
               name: linux-archive
               path: /tmp/shadertool-linux.tar.gz
-    build_windows:
-        name: Windows
-        runs-on: windows-2019
+
+    build_linux_arm64:
+        name: Linux-arm64
+        runs-on: ubuntu-24.04-arm
+        container: ubuntu:20.04
         steps:
-        -   uses: actions/checkout@v1
+        - name: Prepare Environment
+          working-directory: /tmp
+          env:
+            DEBIAN_FRONTEND: noninteractive
+          run: |
+              apt-get -yqq update
+              apt-get -yqq install software-properties-common build-essential git wget
+              add-apt-repository ppa:ubuntu-toolchain-r/test
+              apt-get -yqq update
+              apt-get -yqq install ninja-build g++-10
+        - name: Install CMake
+          run: |
+              wget -O /tmp/cmake-install.sh https://github.com/Kitware/CMake/releases/download/v3.31.9/cmake-3.31.9-linux-aarch64.sh
+              chmod u+x /tmp/cmake-install.sh
+              /tmp/cmake-install.sh --skip-license --prefix=/usr/local
+        - uses: actions/checkout@v5
+          name: Checkout
+          with:
+              submodules: true
+        - name: Configure CMake
+          run: |
+              export CC=gcc-10
+              export CXX=g++-10
+              mkdir build
+              cd build
+              export CXXFLAGS
+              export CFLAGS
+              cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/tmp/install ..
+        - name: Compile
+          working-directory: ./build
+          run: ninja -k 20 all
+        - name: Install
+          working-directory: ./build
+          run: ninja install
+        - name: Create Package
+          working-directory: /tmp/install
+          run: tar -zcvf /tmp/shadertool-linux_arm64.tar.gz *
+        - name: Upload package
+          uses: actions/upload-artifact@v4
+          with:
+              name: linux-arm64-archive
+              path: /tmp/shadertool-linux_arm64.tar.gz
+
+    build_macos:
+        name: macOS
+        runs-on: macos-latest
+        steps:
+        -   uses: actions/checkout@v5
             name: Checkout
             with:
                 submodules: true
@@ -58,7 +117,43 @@ jobs:
           run: |
               mkdir build
               cd build
-              cmake -DCMAKE_INSTALL_PREFIX=C:/install -G "Visual Studio 16 2019" -T "v142" -A "Win32" ..
+              cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET="10.15" \
+                -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DCMAKE_INSTALL_PREFIX=/tmp/install ..
+        - name: Compile
+          working-directory: ./build
+          shell: bash
+          run: cmake --build . --config Release
+        - name: Install
+          working-directory: ./build
+          run: cmake --build . --target install --config Release
+        - name: Sign binaries
+          working-directory: /tmp/install
+          run: |
+            find bin -type f | while read xx; do codesign --force -s - $xx; xattr -c $xx; done
+        - name: Create Package
+          working-directory: /tmp/install
+          shell: bash
+          run: tar -czvf /tmp/shadertool-macos.tar.gz *
+        - name: Upload package
+          uses: actions/upload-artifact@v4
+          with:
+              name: macos-archive
+              path: /tmp/shadertool-macos.tar.gz
+
+    build_windows:
+        name: Windows
+        runs-on: windows-2022
+        steps:
+        -   uses: actions/checkout@v5
+            name: Checkout
+            with:
+                submodules: true
+        - name: Configure CMake
+          shell: bash
+          run: |
+              mkdir build
+              cd build
+              cmake -DCMAKE_INSTALL_PREFIX=C:/install -G "Visual Studio 17 2022" -T "v143" -A "Win32" ..
         - name: Compile
           working-directory: ./build
           shell: bash
@@ -71,53 +166,80 @@ jobs:
           shell: bash
           run: tar --force-local -zcvf 'C:\shadertool-windows.tar.gz' *
         - name: Upload package
-          uses: actions/upload-artifact@v2
+          uses: actions/upload-artifact@v4
           with:
               name: windows-archive
               path: C:/shadertool-windows.tar.gz
 
+    build_windows_arm64:
+        name: Windows-arm64
+        runs-on: windows-11-arm
+        steps:
+        -   uses: actions/checkout@v5
+            name: Checkout
+            with:
+                submodules: true
+        - name: Configure CMake
+          shell: bash
+          run: |
+              mkdir build
+              cd build
+              cmake -DCMAKE_INSTALL_PREFIX=C:/install -G "Visual Studio 17 2022" -T "v143" -A "ARM64" ..
+        - name: Compile
+          working-directory: ./build
+          shell: bash
+          run: cmake --build . --config Release -- /verbosity:minimal
+        - name: Install
+          working-directory: ./build
+          run: cmake --build . --target install --config Release -- /verbosity:minimal
+        - name: Create Package
+          working-directory: C:/install
+          shell: bash
+          run: tar --force-local -zcvf 'C:\shadertool-windows_arm64.tar.gz' *
+        - name: Upload package
+          uses: actions/upload-artifact@v4
+          with:
+              name: windows-arm64-archive
+              path: C:/shadertool-windows_arm64.tar.gz
+
     create_release:
         name: Create release and upload
-        runs-on: ubuntu-20.04
+        runs-on: ubuntu-latest
         needs:
         - build_linux
+        - build_linux_arm64
+        - build_macos
         - build_windows
+        - build_windows_arm64
         steps:
-        - name: Create release
-          id: create_release
-          uses: actions/create-release@v1
-          env:
-              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
-          with:
-              tag_name: ${{ github.ref }}
-              release_name: Release ${{ github.ref }}
-              draft: false
-              prerelease: false
-
         - name: Download Linux builds
-          uses: actions/download-artifact@v2
+          uses: actions/download-artifact@v5
           with:
               name: linux-archive
-        - name: Upload Linux release Asset
-          uses: actions/upload-release-asset@v1
-          env:
-              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+        - name: Download Linux arm64 builds
+          uses: actions/download-artifact@v5
           with:
-              upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
-              asset_path: ./shadertool-linux.tar.gz
-              asset_name: shadertool-linux.tar.gz
-              asset_content_type: application/gzip
+              name: linux-arm64-archive
+
+        - name: Download macOS builds
+          uses: actions/download-artifact@v5
+          with:
+              name: macos-archive
 
         - name: Download Windows builds
-          uses: actions/download-artifact@v2
+          uses: actions/download-artifact@v5
           with:
               name: windows-archive
-        - name: Upload Windows release Asset
-          uses: actions/upload-release-asset@v1
-          env:
-              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+        - name: Download Windows ARM64 builds
+          uses: actions/download-artifact@v5
           with:
-              upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
-              asset_path: ./shadertool-windows.tar.gz
-              asset_name: shadertool-windows.tar.gz
-              asset_content_type: application/gzip
+              name: windows-arm64-archive
+
+        - name: Create release
+          id: create_release
+          uses: softprops/action-gh-release@v2
+          if: github.ref_type == 'tag'
+          with:
+              files: shadertool-*.tar.gz
